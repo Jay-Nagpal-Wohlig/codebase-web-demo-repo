@@ -1,0 +1,156 @@
+name: APPLICATION CICD GCP
+'on':
+  push:
+    branches:
+      - dev
+permissions:
+  id-token: write
+  contents: read
+env:
+  gitOpsRepoName: test-confixa-repo-3
+  organizationName: confixa-labs
+  codeBaseOrganizationName: Jay-Nagpal-Wohlig
+  codeBaseRepoName: codebase-web-demo-repo
+  email_id: jay.nagpal@wohlig.com
+  gitOpsBranch: dev
+  apiUrl: http://localhost:5001/confixa-api
+  runNodeSetup: false
+  projects: |
+    web-demo web-demo-backend-1 true
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Code Checkout
+        uses: actions/checkout@v2
+      - name: Lowercase
+        run: >
+          lowercase_codeBaseOrganizationName=$(echo "${{
+          env.codeBaseOrganizationName }}" | tr '[:upper:]' '[:lower:]')
+
+          echo $lowercase_codeBaseOrganizationName
+
+          echo
+          "lowercase_codeBaseOrganizationName=$lowercase_codeBaseOrganizationName"
+          >> $GITHUB_ENV
+
+          lowercase_codeBaseRepoName=$(echo "${{ env.codeBaseRepoName }}" | tr
+          '[:upper:]' '[:lower:]')
+
+          echo $lowercase_codeBaseRepoName
+
+          echo "lowercase_codeBaseRepoName=$lowercase_codeBaseRepoName" >>
+          $GITHUB_ENV
+      - name: Authenticate with Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Build and Push Docker image
+        env:
+          GOOGLE_PROJECT: ${{ secrets.PROJECT_ID}}
+        run: >
+          gcloud auth configure-docker ${{ secrets.REGION }}-docker.pkg.dev
+
+          docker build -t ${{ secrets.ARTIFACTREPO }}/${{
+          env.lowercase_codeBaseOrganizationName }}-${{
+          env.lowercase_codeBaseRepoName }}:${{ github.sha }} .
+
+          docker push ${{ secrets.ARTIFACTREPO }}/${{
+          env.lowercase_codeBaseOrganizationName }}-${{
+          env.lowercase_codeBaseRepoName }}:${{ github.sha }}
+      - name: Clone Repository
+        run: >
+          git clone https://${{ secrets.GH_USER }}:${{ secrets.TOKEN
+          }}@github.com/${{ env.organizationName }}/${{ env.gitOpsRepoName
+          }}.git
+
+          cd ${{ env.gitOpsRepoName }}
+
+          git checkout ${{ env.gitOpsBranch }}
+      - name: Set Up YQ Line
+        run: |
+          cd ${{ env.gitOpsRepoName }}
+          # Read projects from multi-line string and iterate over each line
+          echo "${{ env.projects }}" | while IFS= read -r project; do
+            projectName=$(echo "$project" | awk '{print $1}')
+            applicationName=$(echo "$project" | awk '{print $2}')
+            if [ -z "$projectName" ] || [ -z "$applicationName" ]; then
+              echo "Skipping invalid project: $project"
+              continue
+            fi
+            # Check if the values.yaml file exists before running yq
+            if [ -f "${projectName}/values.yaml" ]; then
+              echo "Processing projectName: $projectName, applicationName: $applicationName"
+              yq e '.["'"${applicationName}"'"].image = "${{ secrets.ARTIFACTREPO }}/${{ env.lowercase_codeBaseOrganizationName }}-${{ env.lowercase_codeBaseRepoName }}:${{ github.sha }}"' -i "${projectName}/values.yaml"
+            else
+              echo "Skipping: ${projectName}/values.yaml does not exist"
+            fi
+          done
+      - name: Commit and Push Changes
+        run: |
+          cd ${{ env.gitOpsRepoName }}
+          git config user.name "${{ secrets.GH_USER }}"
+          git config user.email "${{ env.email_id }}"
+          git add .
+          git commit -m "Updating newer image"
+          git push --set-upstream origin ${{ env.gitOpsBranch }}
+      - name: Set up Node.js
+        if: env.runNodeSetup == 'true'
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      - name: Install Packages
+        if: env.runNodeSetup == 'true'
+        run: npm install axios
+      - name: Call API to Sync
+        if: env.runNodeSetup == 'true'
+        run: |
+          cd ${{ env.gitOpsRepoName }}
+          echo "${{ env.projects }}" | while IFS= read -r proj; do
+            proName=$(echo "$proj" | awk '{print $1}')
+            application=$(echo "$proj" | awk '{print $2}')
+            status=$(echo "$proj" | awk '{print $3}')
+
+            if [ -z "$proName" ] || [ -z "$application" ] || [ -z "$status" ]; then
+              echo "Skipping invalid project: $proj"
+              continue
+            fi
+            
+            if [ -f "$proName/values.yaml" ] && [ "$status" = "true" ]; then
+              echo "Processing project: $proName, application: $application"
+              node -e "
+              const axios = require('axios');
+              async function argoSync() {
+                const appNamespace = '$proName-${{env.gitOpsBranch}}';
+                const branchName = '${{env.gitOpsBranch}}';
+                const resources = [{
+                  kind: 'Deployment',
+                  namespace: appNamespace,
+                  name: '$application',
+                }];
+                try {
+                  await axios.post('${{env.apiUrl}}/api/argocd/Application/sync', {
+                    branchName: branchName,
+                    applicationName: appNamespace,
+                    appNamespace: '${{env.nameSpace}}',
+                    resources: resources
+                  }, {
+                  headers:{
+                    'by-actions': 'true'
+                  }});
+                  console.log('Sync successful for application:', '$application');
+                } catch (error) {
+                  console.error('Error during sync:', error.message);
+                }
+              }
+              argoSync();
+              "
+            elif [ -f "$proName/values.yaml" ] && [ "$status" = "false" ]; then
+              echo "Skipping: $proName/values.yaml does exist & syncing is off."
+            else
+              echo "Skipping: $proName/values.yaml does not exist."
+            fi
+          done
