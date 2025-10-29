@@ -6,8 +6,10 @@ module.exports = {
   app_name: appName,
   db_name: dbName,
   api_prefix: appName,
-  port: 3000,
-  base_url: process.env.BASE_URL ? process.env.BASE_URL : 'http://localhost:' + process.env.PORT,
+  port: 4001,
+  base_url: process.env.BASE_URL
+    ? process.env.BASE_URL
+    : 'http://localhost:' + '4001',
   mongo: {
     init: process.env.MONGO_INIT === 'true',
     mongourl: process.env.MONGO_URL
@@ -18,7 +20,13 @@ module.exports = {
     no_ready_check: process.env.REDIS_NO_READY_CHECK === 'true',
     port: process.env.REDIS_PORT,
     auth_pass: process.env.REDIS_AUTH_PASS,
-    uri: 'redis://' + process.env.REDIS_HOST + ':' + process.env.REDIS_PORT + '/' + process.env.REDIS_DB,
+    uri:
+      'redis://' +
+      process.env.REDIS_HOST +
+      ':' +
+      process.env.REDIS_PORT +
+      '/' +
+      process.env.REDIS_DB,
     redisExp: process.env.REDIS_EXP
   },
   authentication: {
