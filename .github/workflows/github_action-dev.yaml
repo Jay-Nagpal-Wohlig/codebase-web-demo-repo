@@ -17,6 +17,8 @@ env:
   runNodeSetup: false
   projects: |
     web-demo web-demo-backend-1 true
+    sample-pro sample-pro-backend true
+  artifactPath: ''
 jobs:
   deploy:
     runs-on: ubuntu-24.04
